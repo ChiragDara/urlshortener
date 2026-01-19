@@ -2,7 +2,7 @@ package com.urlshortener.util;
 
 public final class Base62Util {
     private static final char[] ALPHABET =
-            "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".toCharArray();
+            "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".toCharArray();
 
     private Base62Util() {
     }

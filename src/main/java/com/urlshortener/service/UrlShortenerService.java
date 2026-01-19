@@ -7,7 +7,9 @@ import org.springframework.stereotype.Service;
 
 import java.net.URI;
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -30,6 +32,16 @@ public class UrlShortenerService {
     // Counter for Base62 generation
     private final AtomicLong counter = new AtomicLong(0);
 
+    // Metrics: domain -> number of shorten calls
+    private final ConcurrentHashMap<String, AtomicInteger> domainCounts = new ConcurrentHashMap<>();
+
+
+    public Map<String, Integer> getDomainCounts() {
+        Map<String, Integer> snapshot = new ConcurrentHashMap<>();
+        domainCounts.forEach((k, v) -> snapshot.put(k, v.get()));
+        return snapshot;
+    }
+
     /**
      * Creates a shortened URL for the given original URL.
      *
@@ -40,32 +52,26 @@ public class UrlShortenerService {
         URI uri = validate(originalUrl);
         String normalizedUrl = uri.toString();
 
-        //return existing mapping if URL was already shortened
-        String existingKey = longToKey.get(normalizedUrl);
-        if (existingKey != null) {
-            return keyToShortUrl.get(existingKey);
-        }
-        // Synchronize only during creation to avoid duplicate key generation
-        synchronized (this) {
-            existingKey = longToKey.get(normalizedUrl);
-            if (existingKey != null) {
-                return keyToShortUrl.get(existingKey);
-            }
-            // Generate new short key
-            String key = Base62Util.encode(counter.incrementAndGet());
+        // Metrics
+        String domain = uri.getHost().toLowerCase();
+        domainCounts.computeIfAbsent(domain, d -> new AtomicInteger()).incrementAndGet();
+
+        // Thread-safe idempotent creation using computeIfAbsent
+        String key = longToKey.computeIfAbsent(normalizedUrl, k -> {
+            String newKey = Base62Util.encode(counter.incrementAndGet());
 
             ShortUrl shortUrl = new ShortUrl();
             shortUrl.setOriginalUrl(normalizedUrl);
-            shortUrl.setShortKey(key);
+            shortUrl.setShortKey(newKey);
             shortUrl.setCreatedAt(LocalDateTime.now());
             shortUrl.setAccessCount(0);
 
-            // Store mappings in memory
-            longToKey.put(normalizedUrl, key);
-            keyToShortUrl.put(key, shortUrl);
+            keyToShortUrl.put(newKey, shortUrl);
+            return newKey;
+        });
 
-            return shortUrl;
-        }
+        return keyToShortUrl.get(key);
+
     }
 
     /**
@@ -94,11 +100,13 @@ public class UrlShortenerService {
      * @throws UrlNotFoundException if the short key doesn't exist
      */
     public String getOriginalUrl(String shortKey) {
+        if (shortKey == null) {
+            throw new UrlNotFoundException("Short URL not found: null");
+        }
         ShortUrl shortUrl = keyToShortUrl.get(shortKey);
         if (shortUrl == null) {
             throw new UrlNotFoundException("Short URL not found: " + shortKey);
         }
-        // Track access count for informational purposes
         shortUrl.incrementAccessCount();
         return shortUrl.getOriginalUrl();
     }
